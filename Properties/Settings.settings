@@ -1,0 +1,42 @@
+﻿<?xml version='1.0' encoding='utf-8'?>
+<SettingsFile xmlns="http://schemas.microsoft.com/VisualStudio/2004/01/settings" CurrentProfile="(Default)" GeneratedClassNamespace="MailFormatter.Properties" GeneratedClassName="Settings">
+  <Profiles />
+  <Settings>
+    <Setting Name="TemplateIndex" Type="System.Int32" Scope="User">
+      <Value Profile="(Default)">0</Value>
+    </Setting>
+    <Setting Name="FooterText" Type="System.String" Scope="User">
+      <Value Profile="(Default)">Mailify © 2026</Value>
+    </Setting>
+    <Setting Name="IncludeLogo" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
+    <Setting Name="LogoPath" Type="System.String" Scope="User">
+      <Value Profile="(Default)" />
+    </Setting>
+    <Setting Name="FooterColor" Type="System.String" Scope="User">
+      <Value Profile="(Default)">#0255A3</Value>
+    </Setting>
+    <Setting Name="FooterFontFamily" Type="System.String" Scope="User">
+      <Value Profile="(Default)">Calibri</Value>
+    </Setting>
+    <Setting Name="FooterFontSize" Type="System.Int32" Scope="User">
+      <Value Profile="(Default)">10</Value>
+    </Setting>
+    <Setting Name="IncludeFooter" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">True</Value>
+    </Setting>
+    <Setting Name="ShowAllTemplates" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
+    <Setting Name="ShowRawRibbonButton" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
+    <Setting Name="HorizontalAlign" Type="System.String" Scope="User">
+      <Value Profile="(Default)">left</Value>
+    </Setting>
+    <Setting Name="VerticalAlign" Type="System.String" Scope="User">
+      <Value Profile="(Default)">top</Value>
+    </Setting>
+  </Settings>
+</SettingsFile>

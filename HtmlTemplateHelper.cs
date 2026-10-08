@@ -8,6 +8,7 @@ using System.Linq;
 using System.Runtime;
 using System.Runtime.Remoting.Contexts;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.Tab;
 
@@ -104,74 +105,84 @@ namespace MailFormatter
             return sb.ToString();
         }
 
+        private const string FormattedBookmark = "MailifyFormattedV1";
+        /// <summary>
+        /// Formats complete HTML once. Missing/malformed body tags, invalid settings and
+        /// previously formatted messages are returned unchanged to protect the original content.
+        /// A named bookmark survives Outlook's HTML normalization better than a comment alone.
+        /// </summary>
         public static string CreateFromTemplate(string htmlBody)
         {
-            // 1. <body> başlangıcını ve sonunu bul
-            int bodyStartIdx = htmlBody.IndexOf("<body", StringComparison.OrdinalIgnoreCase);
-            int bodyCloseTagStartIdx = htmlBody.IndexOf("</body>", StringComparison.OrdinalIgnoreCase);
+            if (string.IsNullOrEmpty(htmlBody) || Settings.Default.TemplateIndex < 0 || Settings.Default.TemplateIndex > 9)
+                return htmlBody;
 
-            string finalHtml = string.Empty;
+            int bodyTagOpenEndIdx;
+            int bodyCloseTagStartIdx;
+            if (!Utils.HtmlBodyReader.TryGetRange(htmlBody, out bodyTagOpenEndIdx, out bodyCloseTagStartIdx))
+                return htmlBody;
 
-            if (bodyStartIdx != -1 && bodyCloseTagStartIdx != -1)
+            string originalBodyContent = htmlBody.Substring(bodyTagOpenEndIdx, bodyCloseTagStartIdx - bodyTagOpenEndIdx);
+            try
             {
-                // 2. <body ...> etiketinin tam bittiği '>' karakterini bul (Attribute'lar olabilir)
-                int bodyTagOpenEndIdx = htmlBody.IndexOf(">", bodyStartIdx) + 1;
-
-                // 3. Mevcut Body içeriğini (etiketler hariç) ayır
-                string originalBodyContent = htmlBody.Substring(bodyTagOpenEndIdx, bodyCloseTagStartIdx - bodyTagOpenEndIdx);
-
-                string template = string.Empty;
-                int templateIndex = Properties.Settings.Default.TemplateIndex;
-
-                switch (templateIndex)
-                {
-                    case 0:
-                        template = AWNotice(originalBodyContent);
-                        break;
-                    case 1:
-                        template = TemplateBasic(originalBodyContent, Resources.academyDirectorshipBanner, Resources.bottomBannerGray);
-                        break;
-                    case 2:
-                        template = TemplateBasic(originalBodyContent, Resources.appointmentAnnouncement, Resources.bottomBannerGradient);
-                        break;
-                    case 3:
-                        template = TemplateBasic(originalBodyContent, Resources.foreignTradeAndSupportServices, Resources.bottomBannerGreen);
-                        break;
-                    case 4:
-                        template = TemplateBasic(originalBodyContent, Resources.humanResourceAndTalentManagementDirectorship, Resources.bottomBannerGray);
-                        break;
-                    case 5:
-                        template = TemplateBasic(originalBodyContent, Resources.corporateSecurityAndEmergencyDirectorship, Resources.bottomBannerGray);
-                        break;
-                    case 6:
-                        template = TemplateBasic(originalBodyContent, Resources.corporateSolutionsDirectorship, Resources.bottomBannerNavyblue);
-                        break;
-                    case 7:
-                        template = ServiceInterruption(originalBodyContent, NetworkType.Red);
-                        break;
-                    case 8:
-                        template = ServiceInterruption(originalBodyContent, NetworkType.Black);
-                        break;
-                    case 9:
-                        template = TemplateBasic(originalBodyContent, Resources.procurementAndIndustrializationDirectorship, Resources.bottomBannerPurple);
-                        break;
-                    default:
-                        break;
-                }
-
-                if (Settings.Default.IncludeFooter)
-                {
-                    template = AddFooter(template);
-                }
-
-                // 6. Tüm HTML'i yeniden oluştur
-                // Body öncesi + Yeni İçerik + Body sonrası
-                finalHtml = htmlBody.Substring(0, bodyTagOpenEndIdx) +
-                                   template +
-                                   htmlBody.Substring(bodyCloseTagStartIdx);
+                // Only our leading bookmark identifies this body's wrapper. A bookmark in
+                // quoted/replied content must not prevent formatting the new message.
+                if (Utils.HtmlBodyReader.StartsWithBookmark(originalBodyContent, FormattedBookmark))
+                    return htmlBody;
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                return htmlBody;
             }
 
-            return finalHtml;
+            string template = string.Empty;
+            int templateIndex = Properties.Settings.Default.TemplateIndex;
+
+            switch (templateIndex)
+            {
+                case 0:
+                    template = AWNotice(originalBodyContent);
+                    break;
+                case 1:
+                    template = TemplateBasic(originalBodyContent, Resources.academyDirectorshipBanner, Resources.bottomBannerGray);
+                    break;
+                case 2:
+                    template = TemplateBasic(originalBodyContent, Resources.appointmentAnnouncement, Resources.bottomBannerGradient);
+                    break;
+                case 3:
+                    template = TemplateBasic(originalBodyContent, Resources.foreignTradeAndSupportServices, Resources.bottomBannerGreen);
+                    break;
+                case 4:
+                    template = TemplateBasic(originalBodyContent, Resources.humanResourceAndTalentManagementDirectorship, Resources.bottomBannerGray);
+                    break;
+                case 5:
+                    template = TemplateBasic(originalBodyContent, Resources.corporateSecurityAndEmergencyDirectorship, Resources.bottomBannerGray);
+                    break;
+                case 6:
+                    template = TemplateBasic(originalBodyContent, Resources.corporateSolutionsDirectorship, Resources.bottomBannerNavyblue);
+                    break;
+                case 7:
+                    template = ServiceInterruption(originalBodyContent, NetworkType.Red);
+                    break;
+                case 8:
+                    template = ServiceInterruption(originalBodyContent, NetworkType.Black);
+                    break;
+                case 9:
+                    template = TemplateBasic(originalBodyContent, Resources.procurementAndIndustrializationDirectorship, Resources.bottomBannerPurple);
+                    break;
+                default:
+                    return htmlBody;
+            }
+
+            if (Settings.Default.IncludeFooter)
+            {
+                template = AddFooter(template);
+            }
+
+            // 6. Tüm HTML'i yeniden oluştur
+            // Body öncesi + Yeni İçerik + Body sonrası
+            return htmlBody.Substring(0, bodyTagOpenEndIdx) +
+                   "<a name='" + FormattedBookmark + "'></a>" + template +
+                   htmlBody.Substring(bodyCloseTagStartIdx);
         }
 
         public static string CreateHtmlTemplateV2(string originalBody)
@@ -222,7 +233,7 @@ namespace MailFormatter
                 <tr>
                   <td
                     style='padding:8px 16px 4px 16px; font-family:{settings.FooterFontFamily}; font-size:{settings.FooterFontSize}px; line-height:16px; color:{settings.FooterColor};'>
-                      {settings.FooterText}
+                      {EscapeHtml(settings.FooterText)}
                   </td>
                 </tr>
               </table>
@@ -357,7 +368,7 @@ namespace MailFormatter
                                                             <o:p></o:p>
                                                         </span></span></p>
                                             </td><span style='mso-bookmark:_Hlk217561797'></span>
-                                        </tr
+                                        </tr>
                                     </table><span style='mso-bookmark:_Hlk217561797'></span>
                                 </td><span style='mso-bookmark:_Hlk217561797'></span>
                             </tr>
@@ -534,7 +545,7 @@ namespace MailFormatter
             <tr>
               <td
                 style='padding: 4px; font-family:{settings.FooterFontFamily}; font-size:{settings.FooterFontSize}pt; line-height:16px; color:{settings.FooterColor};'>
-                  {settings.FooterText}
+                  {EscapeHtml(settings.FooterText)}
               </td>
             </tr>";
 
@@ -576,6 +587,8 @@ namespace MailFormatter
                 .Replace(">", "&gt;")
                 .Replace("\"", "&quot;")
                 .Replace("'", "&#39;")
+                .Replace("\r\n", "\n")
+                .Replace("\r", "\n")
                 .Replace("\n", "<br/>");
         }
     }

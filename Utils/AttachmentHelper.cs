@@ -1,289 +1,211 @@
 ﻿using System;
-using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using System.Runtime.InteropServices;
 using Outlook = Microsoft.Office.Interop.Outlook;
 
 namespace MailFormatter.Utils
 {
     public static class AttachmentHelper
     {
-        // MAPI Property Tag'leri
         private const string PR_ATTACH_CONTENT_ID = "http://schemas.microsoft.com/mapi/proptag/0x3712001F";
         private const string PR_ATTACH_CONTENT_LOCATION = "http://schemas.microsoft.com/mapi/proptag/0x3713001F";
         private const string PR_ATTACHMENT_HIDDEN = "http://schemas.microsoft.com/mapi/proptag/0x7FFE000B";
         private const string PR_ATTACH_DISPOSITION = "http://schemas.microsoft.com/mapi/proptag/0x3716001F";
         private const string PR_ATTACH_MIME_TAG = "http://schemas.microsoft.com/mapi/proptag/0x370E001F";
         private const string PR_ATTACH_FLAGS = "http://schemas.microsoft.com/mapi/proptag/0x37140003";
+        private const int MapiPropertyNotFound = unchecked((int)0x8004010F);
 
         public static string AddInlineImage(Outlook.MailItem mail, Image resourceImage, string imageFormat = "png")
         {
-            imageFormat = imageFormat.ToLower();
-            string uid = Guid.NewGuid().ToString("N").ToUpper();
-            string contentId = $"image.{imageFormat}@{uid.Substring(0, 16)}.{uid.Substring(16, 16)}";
-
-            string tempFile = Path.Combine(Path.GetTempPath(), $"{contentId}.{imageFormat}");
-
-            // Resmi kaydet
+            if (mail == null) throw new ArgumentNullException(nameof(mail));
+            if (resourceImage == null) throw new ArgumentNullException(nameof(resourceImage));
+            imageFormat = (imageFormat ?? "png").ToLowerInvariant();
+            if (imageFormat == "jpg") imageFormat = "jpeg";
             ImageFormat format;
             switch (imageFormat)
             {
-                case "jpg":
-                case "jpeg":
-                    format = ImageFormat.Jpeg;
-                    break;
-                case "gif":
-                    format = ImageFormat.Gif;
-                    break;
-                case "bmp":
-                    format = ImageFormat.Bmp;
-                    break;
-                default:
-                    format = ImageFormat.Png;
-                    break;
+                case "jpeg": format = ImageFormat.Jpeg; break;
+                case "gif": format = ImageFormat.Gif; break;
+                case "bmp": format = ImageFormat.Bmp; break;
+                case "png": format = ImageFormat.Png; break;
+                default: throw new ArgumentException("Desteklenmeyen resim biçimi.", nameof(imageFormat));
             }
 
-            resourceImage.Save(tempFile, format);
-
-            if (string.IsNullOrEmpty(tempFile) || !File.Exists(tempFile)) return null;
-
-            Outlook.Attachment attachment = mail.Attachments.Add(
-                tempFile,
-                Outlook.OlAttachmentType.olByValue,
-                0,
-                Path.GetFileName(tempFile));
-
-            attachment.PropertyAccessor.SetProperty(
-                    PR_ATTACH_CONTENT_ID,
-                    contentId);
-
-            attachment.PropertyAccessor.SetProperty(
-               PR_ATTACHMENT_HIDDEN,
-               true);
-
-            attachment.PropertyAccessor.SetProperty(
-                    PR_ATTACH_DISPOSITION,
-                    "inline");
-
-            attachment.PropertyAccessor.SetProperty(
-                    PR_ATTACH_MIME_TAG,
-                    $"image/{imageFormat}");
-
-            return contentId;
-        }
-
-        public static void CopyAttachmentsPreserveInline(Outlook.MailItem src, Outlook.MailItem dst)
-        {
-            if (src.Attachments == null || src.Attachments.Count == 0)
-                return;
-
-            string html = src.HTMLBody ?? string.Empty;
-
-            string baseDir = System.IO.Path.Combine(
-                System.IO.Path.GetTempPath(),
-                "MyAddinMailClone",
-                System.Guid.NewGuid().ToString("N")
-            );
-            System.IO.Directory.CreateDirectory(baseDir);
-
-            for (int i = 1; i <= src.Attachments.Count; i++)
-            {
-                Outlook.Attachment srcAtt = src.Attachments[i];
-
-                // Kaynak attachment’ın inline bilgisini oku
-                var meta = ReadInlineMeta(srcAtt);
-
-                // Dosyaya kaydet → hedefe ekle
-                string safeName = MakeSafeFileName(srcAtt.FileName);
-                string fullPath = System.IO.Path.Combine(baseDir, safeName);
-                srcAtt.SaveAsFile(fullPath);
-                Outlook.Attachment dstAtt;
-                try
-                {
-                    dstAtt = dst.Attachments.Add(
-                    fullPath,
-                    Outlook.OlAttachmentType.olByValue,
-                    Type.Missing,
-                    Type.Missing
-                );
-                }
-                finally
-                {
-                    TryDeleteFile(fullPath);
-                }
-
-
-                if (dstAtt == null)
-                    continue;
-
-                // Inline olup olmadığını tespit et:
-                // - PR_ATTACHMENT_HIDDEN true veya
-                // - Content-ID mevcut ve HTML'de cid:contentId geçiyor veya
-                // - Content-Location mevcut ve HTML içinde geçiyor
-                bool inlineByCid = !string.IsNullOrEmpty(meta.ContentId) && ContainsCid(html, meta.ContentId);
-                bool inlineByLoc = !string.IsNullOrEmpty(meta.ContentLocation) && html.IndexOf(meta.ContentLocation, StringComparison.OrdinalIgnoreCase) >= 0;
-
-                bool isInline = meta.Hidden == true || inlineByCid || inlineByLoc;
-
-                // Hedef attachment’a property’leri taşı
-                if (!string.IsNullOrEmpty(meta.ContentId))
-                    SetStringProp(dstAtt, PR_ATTACH_CONTENT_ID, meta.ContentId);
-
-                if (!string.IsNullOrEmpty(meta.ContentLocation))
-                    SetStringProp(dstAtt, PR_ATTACH_CONTENT_LOCATION, meta.ContentLocation);
-
-                if (meta.Flags.HasValue)
-                    SetIntProp(dstAtt, PR_ATTACH_FLAGS, meta.Flags.Value);
-
-                if (isInline)
-                    SetBoolProp(dstAtt, PR_ATTACHMENT_HIDDEN, true);
-            }
-
-            // Bazı Outlook sürümlerinde inline render için HTMLBody’yi sonda tekrar set etmek faydalı olur
-            if (!string.IsNullOrEmpty(dst.HTMLBody))
-                dst.HTMLBody = dst.HTMLBody;
-        }
-
-        private static void TryDeleteFile(string fullPath)
-        {
+            string contentId = Guid.NewGuid().ToString("N") + "@mailify";
+            string directory = CreateTemporaryDirectory();
+            Outlook.Attachments attachments = null;
+            Outlook.Attachment attachment = null;
+            int originalCount = -1;
             try
             {
-                if (File.Exists(fullPath))
-                {
-                    File.Delete(fullPath);
-                }
+                string file = Path.Combine(directory, "image." + imageFormat);
+                resourceImage.Save(file, format);
+                attachments = mail.Attachments;
+                originalCount = attachments.Count;
+                attachment = attachments.Add(file, Outlook.OlAttachmentType.olByValue, 0, Path.GetFileName(file));
+                SetProperty(attachment, PR_ATTACH_CONTENT_ID, contentId);
+                SetProperty(attachment, PR_ATTACHMENT_HIDDEN, true);
+                SetProperty(attachment, PR_ATTACH_DISPOSITION, "inline");
+                SetProperty(attachment, PR_ATTACH_MIME_TAG, "image/" + imageFormat);
+                return contentId;
             }
             catch
             {
-                // Pass
+                RollbackAttachments(attachments, originalCount);
+                throw;
             }
+            finally
+            {
+                ReleaseOwnedComObject(attachment);
+                ReleaseOwnedComObject(attachments);
+                DeleteTemporaryDirectory(directory);
+            }
+        }
+
+        /// <summary>
+        /// Copies attachments and inline metadata. Only absent optional MAPI properties are
+        /// ignored. Other failures propagate and newly added attachments are rolled back.
+        /// The caller must discard a newly created draft if copying fails.
+        /// </summary>
+        public static void CopyAttachmentsPreserveInline(Outlook.MailItem src, Outlook.MailItem dst)
+        {
+            if (src == null) throw new ArgumentNullException(nameof(src));
+            if (dst == null) throw new ArgumentNullException(nameof(dst));
+            if (ReferenceEquals(src, dst)) throw new ArgumentException("Kaynak ve hedef farklı olmalı.");
+            Outlook.Attachments source = null;
+            Outlook.Attachments target = null;
+            string directory = null;
+            int originalCount = -1;
+            try
+            {
+                source = src.Attachments;
+                int count = source.Count;
+                if (count == 0) return;
+                target = dst.Attachments;
+                originalCount = target.Count;
+                directory = CreateTemporaryDirectory();
+                string html = src.HTMLBody ?? string.Empty;
+                for (int index = 1; index <= count; index++)
+                    CopyAttachment(source, target, index, directory, html);
+            }
+            catch
+            {
+                RollbackAttachments(target, originalCount);
+                throw;
+            }
+            finally
+            {
+                ReleaseOwnedComObject(source);
+                ReleaseOwnedComObject(target);
+                DeleteTemporaryDirectory(directory);
+            }
+        }
+
+        private static void CopyAttachment(Outlook.Attachments source, Outlook.Attachments target, int index, string directory, string html)
+        {
+            Outlook.Attachment original = null;
+            Outlook.Attachment copy = null;
+            try
+            {
+                original = source[index];
+                string contentId = GetOptionalProperty(original, PR_ATTACH_CONTENT_ID) as string;
+                string location = GetOptionalProperty(original, PR_ATTACH_CONTENT_LOCATION) as string;
+                object hidden = GetOptionalProperty(original, PR_ATTACHMENT_HIDDEN);
+                object flags = GetOptionalProperty(original, PR_ATTACH_FLAGS);
+                string itemDirectory = Path.Combine(directory, index.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                Directory.CreateDirectory(itemDirectory);
+                string file = Path.Combine(itemDirectory, MakeSafeFileName(original.FileName));
+                original.SaveAsFile(file);
+                copy = target.Add(file, Outlook.OlAttachmentType.olByValue, Type.Missing, Type.Missing);
+                if (copy == null) throw new InvalidOperationException("Ek dosya kopyalanamadı.");
+                if (!string.IsNullOrEmpty(contentId)) SetProperty(copy, PR_ATTACH_CONTENT_ID, contentId);
+                if (!string.IsNullOrEmpty(location)) SetProperty(copy, PR_ATTACH_CONTENT_LOCATION, location);
+                if (flags != null) SetProperty(copy, PR_ATTACH_FLAGS, Convert.ToInt32(flags));
+                bool isInline = (hidden != null && Convert.ToBoolean(hidden)) || ContainsCid(html, contentId) ||
+                    (!string.IsNullOrEmpty(location) && html.IndexOf(location, StringComparison.OrdinalIgnoreCase) >= 0);
+                if (isInline) SetProperty(copy, PR_ATTACHMENT_HIDDEN, true);
+            }
+            finally
+            {
+                ReleaseOwnedComObject(copy);
+                ReleaseOwnedComObject(original);
+            }
+        }
+
+        private static object GetOptionalProperty(Outlook.Attachment attachment, string schema)
+        {
+            Outlook.PropertyAccessor accessor = null;
+            try
+            {
+                accessor = attachment.PropertyAccessor;
+                return accessor.GetProperty(schema);
+            }
+            catch (COMException ex) when (ex.ErrorCode == MapiPropertyNotFound)
+            {
+                return null;
+            }
+            finally { ReleaseOwnedComObject(accessor); }
+        }
+
+        private static void SetProperty(Outlook.Attachment attachment, string schema, object value)
+        {
+            Outlook.PropertyAccessor accessor = null;
+            try
+            {
+                accessor = attachment.PropertyAccessor;
+                accessor.SetProperty(schema, value);
+            }
+            finally { ReleaseOwnedComObject(accessor); }
         }
 
         private static bool ContainsCid(string html, string contentId)
         {
-            // contentId bazen <...> ile gelir; html’de genelde çıplak olur
-            string cid = contentId.Trim();
-            if (cid.StartsWith("<") && cid.EndsWith(">"))
-                cid = cid.Substring(1, cid.Length - 2);
-
-            // cid:xxx veya cid:<xxx> gibi varyasyonlar
-            return html.IndexOf("cid:" + cid, StringComparison.OrdinalIgnoreCase) >= 0
-                || html.IndexOf("cid:<" + cid + ">", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (string.IsNullOrWhiteSpace(contentId)) return false;
+            string cid = contentId.Trim().Trim('<', '>');
+            return html.IndexOf("cid:" + cid, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                html.IndexOf("cid:<" + cid + ">", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static string MakeSafeFileName(string name)
         {
-            foreach (char c in System.IO.Path.GetInvalidFileNameChars())
-                name = name.Replace(c, '_');
-            return name;
+            name = Path.GetFileName(name ?? string.Empty);
+            foreach (char invalid in Path.GetInvalidFileNameChars()) name = name.Replace(invalid, '_');
+            name = name.TrimEnd(' ', '.');
+            return string.IsNullOrWhiteSpace(name) ? "attachment.bin" : name;
         }
 
-        private sealed class InlineMeta
+        private static string CreateTemporaryDirectory()
         {
-            public string ContentId { get; set; }
-            public string ContentLocation { get; set; }
-            public bool? Hidden { get; set; }
-            public int? Flags { get; set; }
+            string directory = Path.Combine(Path.GetTempPath(), "Mailify", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            return directory;
         }
 
-        private static InlineMeta ReadInlineMeta(Outlook.Attachment att)
+        private static void RollbackAttachments(Outlook.Attachments attachments, int originalCount)
         {
-            var meta = new InlineMeta();
-
-            meta.ContentId = GetStringProp(att, PR_ATTACH_CONTENT_ID);
-            meta.ContentLocation = GetStringProp(att, PR_ATTACH_CONTENT_LOCATION);
-            meta.Hidden = GetBoolProp(att, PR_ATTACHMENT_HIDDEN);
-            meta.Flags = GetIntProp(att, PR_ATTACH_FLAGS);
-
-            // Bazı mailler Content-ID’yi <...> şeklinde saklar; normalize edelim
-            if (!string.IsNullOrEmpty(meta.ContentId))
-            {
-                meta.ContentId = meta.ContentId.Trim();
-            }
-
-            return meta;
-        }
-
-        private static string GetStringProp(Outlook.Attachment att, string schema)
-        {
+            if (attachments == null || originalCount < 0) return;
             try
             {
-                var pa = att.PropertyAccessor;
-                object v = pa.GetProperty(schema);
-                return v?.ToString();
+                for (int index = attachments.Count; index > originalCount; index--) attachments.Remove(index);
             }
-            catch
-            {
-                return null;
-            }
+            catch (Exception ex) { Trace.TraceWarning("Mailify attachment rollback failed: {0}", ex.GetType().Name); }
         }
 
-        private static int? GetIntProp(Outlook.Attachment att, string schema)
+        private static void DeleteTemporaryDirectory(string directory)
         {
-            try
-            {
-                var pa = att.PropertyAccessor;
-                object v = pa.GetProperty(schema);
-                if (v == null) return null;
-                return Convert.ToInt32(v);
-            }
-            catch
-            {
-                return null;
-            }
+            if (directory == null) return;
+            try { Directory.Delete(directory, true); }
+            catch (IOException ex) { Trace.TraceWarning("Mailify temporary cleanup failed: {0}", ex.GetType().Name); }
+            catch (UnauthorizedAccessException ex) { Trace.TraceWarning("Mailify temporary cleanup failed: {0}", ex.GetType().Name); }
         }
 
-        private static bool? GetBoolProp(Outlook.Attachment att, string schema)
+        internal static void ReleaseOwnedComObject(object value)
         {
-            try
-            {
-                var pa = att.PropertyAccessor;
-                object v = pa.GetProperty(schema);
-                if (v == null) return null;
-                return Convert.ToBoolean(v);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static void SetStringProp(Outlook.Attachment att, string schema, string value)
-        {
-            try
-            {
-                att.PropertyAccessor.SetProperty(schema, value);
-            }
-            catch
-            {
-                // bazı attachment tiplerinde set engellenebilir
-            }
-        }
-
-        private static void SetIntProp(Outlook.Attachment att, string schema, int value)
-        {
-            try
-            {
-                att.PropertyAccessor.SetProperty(schema, value);
-            }
-            catch
-            {
-            }
-        }
-
-        private static void SetBoolProp(Outlook.Attachment att, string schema, bool value)
-        {
-            try
-            {
-                att.PropertyAccessor.SetProperty(schema, value);
-            }
-            catch
-            {
-            }
+            // Release only wrappers acquired by this operation; never FinalRelease shared Outlook objects.
+            if (value != null && Marshal.IsComObject(value)) Marshal.ReleaseComObject(value);
         }
     }
 }

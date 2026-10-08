@@ -29,35 +29,22 @@ namespace MailFormatter
 
                 if (e.Control.Context is Explorer explorer && explorer != null)
                 {
-                    Application app = Globals.ThisAddIn.Application;
-                    MailItem newMailItem = app.CreateItem(Outlook.OlItemType.olMailItem);
-                    newMailItem.Subject = mailItem.Subject ?? "Konu Yok";
-
-                    if (!string.IsNullOrEmpty(newMailItem.HTMLBody))
-                    {
-                        newMailItem.HTMLBody = mailItem.HTMLBody;
-                    }
-                    else
-                    {
-                        newMailItem.Body = mailItem.Body ?? "";
-                    }
-
-                    Utils.AttachmentHelper.CopyAttachmentsPreserveInline(mailItem, newMailItem);
-
-                    newMailItem.HTMLBody = HtmlTemplateHelper.CreateFromTemplate(newMailItem.HTMLBody);
-                    newMailItem.Display(false);
+                    CreateFormattedCopy(mailItem);
                 }
                 else
                 {
-                    mailItem.HTMLBody = HtmlTemplateHelper.CreateFromTemplate(mailItem.HTMLBody);
+                    string original = mailItem.HTMLBody;
+                    string formatted = HtmlTemplateHelper.CreateFromTemplate(original);
+                    if (formatted != original) mailItem.HTMLBody = formatted;
 
                 }
 
             }
             catch (System.Exception ex)
             {
+                System.Diagnostics.Trace.TraceError("Mailify operation failed: {0}", ex.GetType().Name);
                 System.Windows.Forms.MessageBox.Show(
-                    $"Hata oluştu: {ex.Message}\n\n{ex.StackTrace}",
+                    "E-posta biçimlendirilemedi. İşlem tamamlanmadı.",
                     "Hata",
                     System.Windows.Forms.MessageBoxButtons.OK,
                     System.Windows.Forms.MessageBoxIcon.Error);
@@ -68,31 +55,58 @@ namespace MailFormatter
         {
             try
             {
-                RibbonToggleButton btn = (RibbonToggleButton)sender;
                 MailItem mailItem = GetActiveMail(e);
-
-                if (mailItem == null)
-                {
-                    btn.Checked = false;
-                    return;
-                }
-
-                if (btn.Checked)
-                {
-                    mailItem.Body = mailItem.HTMLBody;
-                }
-                else
-                {
-                    mailItem.HTMLBody = mailItem.Body;
-                }
+                if (mailItem == null) return;
+                using (var preview = new Forms.RawBodyForm(mailItem.HTMLBody ?? string.Empty))
+                    preview.ShowDialog();
             }
             catch (System.Exception ex)
             {
+                System.Diagnostics.Trace.TraceError("Mailify operation failed: {0}", ex.GetType().Name);
                 System.Windows.Forms.MessageBox.Show(
                     $"Hata oluştu: {ex.Message}",
                     "Hata",
                     System.Windows.Forms.MessageBoxButtons.OK,
                     System.Windows.Forms.MessageBoxIcon.Error);
+            }
+            finally
+            {
+                if (sender is RibbonToggleButton button) button.Checked = false;
+            }
+        }
+
+        private static void CreateFormattedCopy(MailItem original)
+        {
+            MailItem copy = null;
+            bool displayed = false;
+            try
+            {
+                copy = Globals.ThisAddIn.Application.CreateItem(OlItemType.olMailItem);
+                copy.Subject = original.Subject ?? "Konu Yok";
+                if (original.BodyFormat != OlBodyFormat.olFormatPlain && !string.IsNullOrEmpty(original.HTMLBody))
+                {
+                    copy.BodyFormat = OlBodyFormat.olFormatHTML;
+                    copy.HTMLBody = original.HTMLBody;
+                }
+                else
+                {
+                    copy.Body = original.Body ?? string.Empty;
+                    copy.BodyFormat = OlBodyFormat.olFormatHTML;
+                }
+                string formatted = HtmlTemplateHelper.CreateFromTemplate(copy.HTMLBody);
+                Utils.AttachmentHelper.CopyAttachmentsPreserveInline(original, copy);
+                copy.HTMLBody = formatted;
+                copy.Display(false);
+                displayed = true;
+            }
+            finally
+            {
+                if (copy != null && !displayed)
+                {
+                    try { copy.Close(OlInspectorClose.olDiscard); }
+                    catch (System.Exception ex) { System.Diagnostics.Trace.TraceWarning("Mailify draft cleanup failed: {0}", ex.GetType().Name); }
+                }
+                Utils.AttachmentHelper.ReleaseOwnedComObject(copy);
             }
         }
 

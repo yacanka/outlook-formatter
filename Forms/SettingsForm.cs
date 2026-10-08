@@ -115,20 +115,33 @@ namespace MailFormatter.Forms
         /// </summary>
         private void btnSave_Click(object sender, EventArgs e)
         {
-            if (ValidateSettings())
+            if (!ValidateSettings()) return;
+            try
             {
                 SaveSettings();
-                _hasChanges = false;
-
-                /*MessageBox.Show(
-                    "Ayarlar başarıyla kaydedildi!",
-                    "Bilgi",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
-
-                this.DialogResult = DialogResult.OK;*/
-                this.Close();
             }
+            catch (Exception ex)
+            {
+                _hasChanges = true;
+                System.Diagnostics.Trace.TraceError("Mailify settings save failed: {0}", ex.GetType().Name);
+                MessageBox.Show("Ayarlar kaydedilemedi. Önceki ayarlar korundu; tekrar deneyebilirsiniz.",
+                    "Kayıt Hatası", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            _hasChanges = false;
+            try
+            {
+                ShowRawRibbonButton();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.TraceWarning("Mailify ribbon refresh failed: {0}", ex.GetType().Name);
+                MessageBox.Show("Ayarlar kaydedildi. Şerit görünümünün güncellenmesi için Outlook'u yeniden açın.",
+                    "Bilgi", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            DialogResult = DialogResult.OK;
+            Close();
         }
 
         /// <summary>
@@ -249,11 +262,16 @@ namespace MailFormatter.Forms
             FormatterRibbon ribbon = Globals.Ribbons.GetRibbon<FormatterRibbon>();
             FormatterRibbonCompose ribbonCompose = Globals.Ribbons.GetRibbon<FormatterRibbonCompose>();
 
-            ribbon.btnShowRaw.Visible = chkShowRawRibbon.Checked;
-            ribbonCompose.btnShowRaw.Visible = chkShowRawRibbon.Checked;
-
-            ribbon.btnShowRaw.PerformLayout();
-            ribbonCompose.btnShowRaw.PerformLayout();
+            if (ribbon != null)
+            {
+                ribbon.btnShowRaw.Visible = Settings.Default.ShowRawRibbonButton;
+                ribbon.btnShowRaw.PerformLayout();
+            }
+            if (ribbonCompose != null)
+            {
+                ribbonCompose.btnShowRaw.Visible = Settings.Default.ShowRawRibbonButton;
+                ribbonCompose.btnShowRaw.PerformLayout();
+            }
         }
 
         /// <summary>
@@ -272,7 +290,7 @@ namespace MailFormatter.Forms
         /// </summary>
         private void UpdateTemplateListState()
         {
-            string prevSelection = templateBox.SelectedText;
+            object prevSelection = templateBox.SelectedItem;
 
             templateBox.BeginUpdate();
 
@@ -352,6 +370,11 @@ namespace MailFormatter.Forms
         /// </summary>
         private bool ValidateSettings()
         {
+            if (templateBox.SelectedIndex < 0 || templateBox.SelectedIndex > 9)
+            {
+                MessageBox.Show("Lütfen geçerli bir şablon seçin.", "Doğrulama Hatası", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
             // Renk formatı kontrolü
             try
             {
@@ -403,7 +426,8 @@ namespace MailFormatter.Forms
                 chkIncludeLogo.Checked = Settings.Default.IncludeLogo;
                 chkIncludeFooter.Checked = Settings.Default.IncludeFooter;
                 chkShowAllTemplate.Checked = Settings.Default.ShowAllTemplates;
-                templateBox.SelectedIndex = Settings.Default.TemplateIndex;
+                int templateIndex = Settings.Default.TemplateIndex;
+                templateBox.SelectedIndex = templateIndex >= 0 && templateIndex < templateBox.Items.Count ? templateIndex : 0;
 
                 txtLogoPath.Text = Settings.Default.LogoPath;
 
@@ -423,7 +447,7 @@ namespace MailFormatter.Forms
                 if (fontIndex >= 0)
                     cmbFontFamily.SelectedIndex = fontIndex;
 
-                numFontSize.Value = Settings.Default.FooterFontSize;
+                numFontSize.Value = Math.Max(numFontSize.Minimum, Math.Min(numFontSize.Maximum, Settings.Default.FooterFontSize));
             }
             catch (Exception ex)
             {
@@ -437,26 +461,23 @@ namespace MailFormatter.Forms
         /// </summary>
         private void SaveSettings()
         {
-            if (Settings.Default.ShowRawRibbonButton != chkShowRawRibbon.Checked)
+            Utils.SettingsPersistence.Save(Settings.Default, () =>
             {
                 Settings.Default.ShowRawRibbonButton = chkShowRawRibbon.Checked;
-                ShowRawRibbonButton();
-            }
+                Settings.Default.TemplateIndex = templateBox.SelectedIndex;
+                Settings.Default.IncludeLogo = chkIncludeLogo.Checked;
+                Settings.Default.LogoPath = txtLogoPath.Text;
+                Settings.Default.IncludeFooter = chkIncludeFooter.Checked;
+                Settings.Default.ShowAllTemplates = chkShowAllTemplate.Checked;
+                Settings.Default.FooterText = txtFooterText.Text;
+                Settings.Default.FooterColor = txtHeaderColor.Text;
+                Settings.Default.FooterFontFamily = cmbFontFamily.SelectedItem?.ToString() ?? "Segoe UI";
+                Settings.Default.FooterFontSize = (int)numFontSize.Value;
 
-            Settings.Default.TemplateIndex = templateBox.SelectedIndex;
-            Settings.Default.IncludeLogo = chkIncludeLogo.Checked;
-            Settings.Default.LogoPath = txtLogoPath.Text;
-            Settings.Default.IncludeFooter = chkIncludeFooter.Checked;
-            Settings.Default.ShowAllTemplates = chkShowAllTemplate.Checked;
-            Settings.Default.FooterText = txtFooterText.Text;
-            Settings.Default.FooterColor = txtHeaderColor.Text;
-            Settings.Default.FooterFontFamily = cmbFontFamily.SelectedItem?.ToString() ?? "Segoe UI";
-            Settings.Default.FooterFontSize = (int)numFontSize.Value;
+                Settings.Default.HorizontalAlign = (string)horizontalPanel.Controls.OfType<RadioButton>().FirstOrDefault(r => r.Checked)?.Tag;
+                Settings.Default.VerticalAlign = (string)verticalPanel.Controls.OfType<RadioButton>().FirstOrDefault(r => r.Checked)?.Tag;
 
-            Settings.Default.HorizontalAlign = (string)horizontalPanel.Controls.OfType<RadioButton>().FirstOrDefault(r => r.Checked)?.Tag;
-            Settings.Default.VerticalAlign = (string)verticalPanel.Controls.OfType<RadioButton>().FirstOrDefault(r => r.Checked)?.Tag;
-
-            Settings.Default.Save();
+            });
         }
 
         /// <summary>
